@@ -1,10 +1,11 @@
 import os
 from openai import OpenAI
 import json
+from utility.script.json_safeguard import extract_json
 
 if len(os.environ.get("GROQ_API_KEY")) > 30:
     from groq import Groq
-    model = "llama-3.1-70b-versatile"
+    model = "llama-3.1-8b-instant"  # UPDATED MODEL
     client = Groq(
         api_key=os.environ.get("GROQ_API_KEY"),
         )
@@ -19,25 +20,9 @@ def generate_script(topic):
         Your facts shorts are concise, each lasting less than 50 seconds (approximately 140 words). 
         They are incredibly engaging and original. When a user requests a specific type of facts short, you will create it.
 
-        For instance, if the user asks for:
-        Weird facts
-        You would produce content like this:
-
-        Weird facts you don't know:
-        - Bananas are berries, but strawberries aren't.
-        - A single cloud can weigh over a million pounds.
-        - There's a species of jellyfish that is biologically immortal.
-        - Honey never spoils; archaeologists have found pots of honey in ancient Egyptian tombs that are over 3,000 years old and still edible.
-        - The shortest war in history was between Britain and Zanzibar on August 27, 1896. Zanzibar surrendered after 38 minutes.
-        - Octopuses have three hearts and blue blood.
-
-        You are now tasked with creating the best short script based on the user's requested type of 'facts'.
-
         Keep it brief, highly interesting, and unique.
 
-        Stictly output the script in a JSON format like below, and only provide a parsable JSON object with the key 'script'.
-
-        # Output
+        Strictly output the script in a JSON format:
         {"script": "Here is the script ..."}
         """
     )
@@ -49,13 +34,14 @@ def generate_script(topic):
                 {"role": "user", "content": topic}
             ]
         )
+
     content = response.choices[0].message.content
+    data = extract_json(content)
+    return data["script"].strip()
     try:
-        script = json.loads(content)["script"]
-    except Exception as e:
-        json_start_index = content.find('{')
-        json_end_index = content.rfind('}')
-        print(content)
-        content = content[json_start_index:json_end_index+1]
-        script = json.loads(content)["script"]
-    return script
+        return json.loads(content)["script"]
+    except Exception:
+        json_start = content.find("{")
+        json_end = content.rfind("}") + 1
+        cleaned = content[json_start:json_end]
+        return json.loads(cleaned)["script"]

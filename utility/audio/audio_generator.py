@@ -1,10 +1,5 @@
-import edge_tts
+from gtts import gTTS
 
-async def generate_audio(text,outputFilename):
-    communicate = edge_tts.Communicate(text,"en-AU-WilliamNeural")
-    await communicate.save(outputFilename)
-
-
-
-
-
+def generate_audio(text, outputFilename):
+    tts = gTTS(text=text, lang="en")
+    tts.save(outputFilename)
