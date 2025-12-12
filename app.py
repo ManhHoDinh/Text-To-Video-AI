@@ -35,21 +35,20 @@ if __name__ == "__main__":
     # 4. Generate search terms from captions
     search_terms = getVideoSearchQueriesTimed(script_text, timed_captions)
     print(search_terms)
-
     # 5. Get background videos
     if search_terms:
-        background_video_urls = generate_video_url(search_terms, VIDEO_SERVER)
+        background_video_urls = generate_video_url(search_terms)
         print(background_video_urls)
     else:
         print("No background video")
         background_video_urls = None
 
-    # 6. Merge empty intervals
-    background_video_urls = merge_empty_intervals(background_video_urls)
+    # # 6. Merge empty intervals
+    # background_video_urls = merge_empty_intervals(background_video_urls)
 
-    # 7. Final video rendering
-    if background_video_urls:
-        video = get_output_media(SAMPLE_FILE_NAME, timed_captions, background_video_urls, VIDEO_SERVER)
-        print(video)
-    else:
-        print("No video")
+    # # 7. Final video rendering
+    # if background_video_urls:
+    #     video = get_output_media(SAMPLE_FILE_NAME, timed_captions, background_video_urls, VIDEO_SERVER)
+    #     print(video)
+    # else:
+    #     print("No video")

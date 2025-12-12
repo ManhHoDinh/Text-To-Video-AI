@@ -1,100 +1,307 @@
-import os 
+import os
+import time
 import requests
-from utility.utils import log_response,LOG_TYPE_PEXEL
+from utility.utils import log_response, LOG_TYPE_PEXEL
 
+
+# ================================
+#   PEXELS CONFIG
+# ================================
 PEXELS_API_KEY = os.environ.get("PEXELS_KEY")
 
-def search_videos(query_string, orientation_landscape=True):
-   
+
+# ================================
+#   REQUEST WITH RETRY
+# ================================
+def pexels_search(query, retries=3):
+    """Call Pexels API with retry for TikTok portrait videos."""
     url = "https://api.pexels.com/videos/search"
     headers = {
         "Authorization": PEXELS_API_KEY,
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        "User-Agent": "Mozilla/5.0"
     }
     params = {
-        "query": query_string,
-        "orientation": "landscape" if orientation_landscape else "portrait",
-        "per_page": 15
+        "query": query,
+        "orientation": "portrait",
+        "per_page": 20
     }
 
-    response = requests.get(url, headers=headers, params=params)
-    json_data = response.json()
-    log_response(LOG_TYPE_PEXEL,query_string,response.json())
-   
-    return json_data
-def getBestVideo(query_string, orientation_landscape=True, used_vids=None):
-    if used_vids is None:
-        used_vids = set()
-    else:
-        used_vids = set(used_vids)  # ensure it's always a set
+    for attempt in range(retries):
+        try:
+            response = requests.get(url, headers=headers, params=params, timeout=8)
 
-    vids = search_videos(query_string, orientation_landscape)
-    print(vids)
-
-    if not isinstance(vids, dict) or "videos" not in vids:
-        return None
-
-    videos = vids.get("videos", [])
-    if not videos:
-        return None
-
-    def is_landscape(video):
-        w = video.get("width", 0)
-        h = video.get("height", 0)
-        return w >= 1920 and h >= 1080 and abs(w/h - 16/9) < 0.01
-
-    def is_portrait(video):
-        w = video.get("width", 0)
-        h = video.get("height", 0)
-        return h >= 1920 and w >= 1080 and abs(h/w - 16/9) < 0.01
-
-    if orientation_landscape:
-        filtered_videos = [v for v in videos if is_landscape(v)]
-    else:
-        filtered_videos = [v for v in videos if is_portrait(v)]
-
-    if not filtered_videos:
-        return None
-
-    sorted_videos = sorted(filtered_videos, key=lambda x: abs(15 - int(x.get("duration", 0))))
-
-    for video in sorted_videos:
-        for f in video.get("video_files", []):
-            link = f.get("link")
-            if not link:
+            if response.status_code == 429:  # rate limit
+                time.sleep(1.3)
                 continue
 
-            w, h = f.get("width"), f.get("height")
-            base = link.split(".hd")[0]
-
-            if base in used_vids:
+            if response.status_code >= 500:  # server error
+                time.sleep(1)
                 continue
 
-            if orientation_landscape and w == 1920 and h == 1080:
-                used_vids.add(base)
-                return link
+            json_data = response.json()
+            log_response(LOG_TYPE_PEXEL, query, json_data)
+            return json_data
 
-            if not orientation_landscape and w == 1080 and h == 1920:
-                used_vids.add(base)
-                return link
+        except Exception:
+            time.sleep(1)
 
     return None
 
 
-def generate_video_url(timed_video_searches,video_server):
-        timed_video_urls = []
-        if video_server == "pexel":
-            used_links = []
-            for (t1, t2), search_terms in timed_video_searches:
-                url = ""
-                for query in search_terms:
-                  
-                    url = getBestVideo(query, orientation_landscape=True, used_vids=used_links)
-                    if url:
-                        used_links.append(url.split('.hd')[0])
-                        break
-                timed_video_urls.append([[t1, t2], url])
-        elif video_server == "stable_diffusion":
-            timed_video_urls = get_images_for_video(timed_video_searches)
+# ================================
+#   CHECK RATIO 9:16
+# ================================
+def is_tiktok_ratio(w, h):
+    """Check if width/height ≈ 9:16."""
+    if not w or not h:
+        return False
+    ratio = h / w
+    return 1.70 <= ratio <= 1.90  # khoảng xấp xỉ 9:16
 
-        return timed_video_urls
+
+# ================================
+#   GET BEST VIDEO (ONLY PEXELS)
+# ================================
+def getBestVideo(query_list, used_vids=None, target_duration=5):
+    """
+    Select best TikTok 9:16 video:
+        - correct ratio (9:16)
+        - avoid duplicate videos
+        - prefer full HD 1080x1920
+        - duration closest to target_duration
+    """
+
+    if used_vids is None:
+        used_vids = set()
+    else:
+        used_vids = set(used_vids)
+
+    if not isinstance(query_list, list):
+        query_list = [query_list]
+
+    for query in query_list:
+
+        data = pexels_search(query)
+        if not data or "videos" not in data:
+            continue
+
+        videos = data.get("videos", [])
+        if not videos:
+            continue
+
+        # Lọc các video đúng tỷ lệ 9:16
+        valid = []
+        for v in videos:
+            w = v.get("width", 0)
+            h = v.get("height", 0)
+
+            if is_tiktok_ratio(w, h):
+                valid.append(v)
+
+        if not valid:
+            continue
+
+        # Sắp xếp theo độ gần target duration nhất
+        valid.sort(key=lambda x: abs(target_duration - int(x.get("duration", 0))))
+
+        # Lấy video phù hợp nhất
+        for v in valid:
+            for f in v.get("video_files", []):
+                link = f.get("link")
+                if not link:
+                    continue
+
+                w = f.get("width")
+                h = f.get("height")
+                base = link.split(".hd")[0]  # loại bỏ biến thể URL để nhận diện duplicate
+
+                if base in used_vids:
+                    continue
+
+                # Ưu tiên 1080x1920
+                if w == 1080 and h == 1920:
+                    used_vids.add(base)
+                    return link
+
+                # Chấp nhận bất kỳ 9:16 video nào
+                if is_tiktok_ratio(w, h):
+                    used_vids.add(base)
+                    return link
+
+    return None
+
+
+# ================================
+#   GENERATE FINAL RESULT
+# ================================
+import os
+import time
+import requests
+from utility.utils import log_response, LOG_TYPE_PEXEL
+
+
+# ================================
+#   PEXELS CONFIG
+# ================================
+PEXELS_API_KEY = os.environ.get("PEXELS_KEY")
+
+
+# ================================
+#   REQUEST WITH RETRY
+# ================================
+def pexels_search(query, retries=3):
+    """Call Pexels API with retry for TikTok portrait videos."""
+    url = "https://api.pexels.com/videos/search"
+    headers = {
+        "Authorization": PEXELS_API_KEY,
+        "User-Agent": "Mozilla/5.0"
+    }
+    params = {
+        "query": query,
+        "orientation": "portrait",
+        "per_page": 20
+    }
+
+    for attempt in range(retries):
+        try:
+            response = requests.get(url, headers=headers, params=params, timeout=8)
+
+            if response.status_code == 429:  # rate limit
+                time.sleep(1.3)
+                continue
+
+            if response.status_code >= 500:  # server error
+                time.sleep(1)
+                continue
+
+            json_data = response.json()
+            log_response(LOG_TYPE_PEXEL, query, json_data)
+            return json_data
+
+        except Exception:
+            time.sleep(1)
+
+    return None
+
+
+# ================================
+#   CHECK RATIO 9:16
+# ================================
+def is_tiktok_ratio(w, h):
+    """Check if width/height ≈ 9:16."""
+    if not w or not h:
+        return False
+    ratio = h / w
+    return 1.70 <= ratio <= 1.90  # khoảng xấp xỉ 9:16
+
+
+# ================================
+#   GET BEST VIDEO (ONLY PEXELS)
+# ================================
+def getBestVideo(query_list, used_vids=None, target_duration=5):
+    """
+    Select best TikTok 9:16 video:
+        - correct ratio (9:16)
+        - avoid duplicate videos
+        - prefer full HD 1080x1920
+        - duration closest to target_duration
+    """
+
+    if used_vids is None:
+        used_vids = set()
+    else:
+        used_vids = set(used_vids)
+
+    if not isinstance(query_list, list):
+        query_list = [query_list]
+
+    for query in query_list:
+
+        data = pexels_search(query)
+        if not data or "videos" not in data:
+            continue
+
+        videos = data.get("videos", [])
+        if not videos:
+            continue
+
+        # Lọc các video đúng tỷ lệ 9:16
+        valid = []
+        for v in videos:
+            w = v.get("width", 0)
+            h = v.get("height", 0)
+
+            if is_tiktok_ratio(w, h):
+                valid.append(v)
+
+        if not valid:
+            continue
+
+        # Sắp xếp theo độ gần target duration nhất
+        valid.sort(key=lambda x: abs(target_duration - int(x.get("duration", 0))))
+
+        # Lấy video phù hợp nhất
+        for v in valid:
+            for f in v.get("video_files", []):
+                link = f.get("link")
+                if not link:
+                    continue
+
+                w = f.get("width")
+                h = f.get("height")
+                base = link.split(".hd")[0]  # loại bỏ biến thể URL để nhận diện duplicate
+
+                if base in used_vids:
+                    continue
+
+                # Ưu tiên 1080x1920
+                if w == 1080 and h == 1920:
+                    used_vids.add(base)
+                    return link
+
+                # Chấp nhận bất kỳ 9:16 video nào
+                if is_tiktok_ratio(w, h):
+                    used_vids.add(base)
+                    return link
+
+    return None
+
+
+# ================================
+#   GENERATE FINAL RESULT
+# ================================
+def generate_video_url(timed_video_searches):
+    """
+    timed_video_searches = [
+      {
+        "start": 0,
+        "end": 3.3,
+        "keywords": ["beer", "belly"]
+      },
+      ...
+    ]
+    """
+
+    timed_video_urls = []
+    used = set()  # tránh duplicate video
+
+    for item in timed_video_searches:
+
+        # --- Lấy thông số ---
+        t1 = float(item.get("start", 0))
+        t2 = float(item.get("end", 0))
+        keywords = item.get("keywords", [])
+
+        duration = t2 - t1
+
+        # --- Gọi Pexels ---
+        url = getBestVideo(
+            query_list=keywords,
+            used_vids=used,
+            target_duration=duration
+        )
+
+        # --- Ghi vào danh sách ---
+        timed_video_urls.append([[t1, t2], url])
+
+    return timed_video_urls
