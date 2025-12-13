@@ -1,4 +1,4 @@
-from utility.script.script_generator import generate_script
+from utility.script.script_generator import generate_script, extract_text_for_tts
 from utility.audio.audio_generator import generate_audio
 from utility.captions.timed_captions_generator import generate_timed_captions
 from utility.video.background_video_generator import generate_video_url
@@ -20,14 +20,18 @@ if __name__ == "__main__":
     print("script:", script_text)
 
     # 2. Generate TTS audio safely
-    generate_audio(script_text, SAMPLE_FILE_NAME)
-
+    # Lấy toàn bộ text từ script JSON
+    text_for_tts = extract_text_for_tts(script_text)
+    print(text_for_tts)
+    # Gọi hàm tạo audio với chuỗi text
+    generate_audio(text_for_tts, SAMPLE_FILE_NAME)
     # 3. Generate whisper timestamps
     timed_captions = generate_timed_captions(
       audio_filename=SAMPLE_FILE_NAME,
-      script_text=script_text,
+      script_json=script_text,   # đổi tên tham số
       model_size="medium"
     )
+
     print(timed_captions)
 
     # 4. Generate search terms from captions
@@ -40,9 +44,9 @@ if __name__ == "__main__":
     else:
         print("No background video")
         background_video_urls = None
-
+    print(background_video_urls)
     # 6. Merge empty intervals
-    # background_video_urls = merge_empty_intervals(background_video_urls)
+    background_video_urls = merge_empty_intervals(background_video_urls)
 
     # 7. Final video rendering
     if background_video_urls:

@@ -3,18 +3,25 @@ import unicodedata
 import difflib
 from whisper_timestamped import load_model, transcribe_timestamped
 
-
 # =======================
 # MAIN
 # =======================
 
-def generate_timed_captions(
-    audio_filename,
-    script_text,
-    model_size="medium"
-):
+def generate_timed_captions(audio_filename, script_json, model_size="medium"):
+    """
+    Tạo caption có timestamp dựa trên audio và script mới dạng JSON.
+    
+    Args:
+        audio_filename (str): File audio cần tạo captions.
+        script_json (dict): Script dạng mới {title, script_parts, call_to_action}.
+        model_size (str): Kích thước model Whisper.
+    
+    Returns:
+        list: [(start_end_tuple, phrase), ...]
+    """
     model = load_model(model_size)
 
+    # Transcribe audio với Whisper
     whisper_result = transcribe_timestamped(
         model,
         audio_filename,
@@ -22,13 +29,39 @@ def generate_timed_captions(
         fp16=False
     )
 
-    whisper_words = extract_whisper_words(whisper_result)
+    # 1️⃣ Trích xuất từ JSON script → chuỗi text
+    script_text = extract_text_from_json(script_json)
+
+    # 2️⃣ Tách script thành các câu/phrases
     script_phrases = split_script_to_phrases(script_text)
 
-    return align_script_phrases_with_time(
-        script_phrases,
-        whisper_words
-    )
+    # 3️⃣ Lấy danh sách words từ Whisper
+    whisper_words = extract_whisper_words(whisper_result)
+
+    # 4️⃣ Align script phrases với thời gian
+    return align_script_phrases_with_time(script_phrases, whisper_words)
+
+
+# =======================
+# CHUYỂN JSON → CHUỖI
+# =======================
+
+def extract_text_from_json(script_json: dict) -> str:
+    """
+    Nối toàn bộ text từ script JSON (script_parts + call_to_action)
+    thành chuỗi duy nhất.
+    """
+    all_text = " ".join([
+        part.get("text", "").strip()
+        for part in script_json.get("script_parts", [])
+        if part.get("text")
+    ])
+
+    call_to_action = script_json.get("call_to_action", "").strip()
+    if call_to_action:
+        all_text += f". {call_to_action}"
+
+    return all_text.strip()
 
 
 # =======================
@@ -113,7 +146,6 @@ def align_script_phrases_with_time(script_phrases, whisper_words):
 
         start_time = None
         end_time = None
-
         matched = 0
 
         for i in range(w_idx, len(whisper_words)):

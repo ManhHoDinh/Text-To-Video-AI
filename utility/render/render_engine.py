@@ -91,12 +91,14 @@ def get_output_media(audio_file_path, timed_captions, background_video_data, vid
     for (t1, t2), text in timed_captions:
         text_clip = TextClip(
             txt=text,
-            fontsize=100,
+            fontsize=40,             # chữ nhỏ hơn
             color="white",
-            stroke_width=3,
+            stroke_width=2,
             stroke_color="black",
-            method="label"
-        ).set_start(t1).set_end(t2).set_position(("center", 800))
+            method="caption",        # wrap chữ đẹp hơn
+            size=(1280, None),       # giới hạn width để wrap chữ
+            align='center'
+        ).set_start(t1).set_end(t2).set_position(("center", "bottom"))
         visual_clips.append(text_clip)
 
     # ----------------------
