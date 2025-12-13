@@ -1,9 +1,3 @@
-from openai import OpenAI
-import os
-import edge_tts
-import json
-import asyncio
-import whisper_timestamped as whisper
 from utility.script.script_generator import generate_script
 from utility.audio.audio_generator import generate_audio
 from utility.captions.timed_captions_generator import generate_timed_captions
@@ -18,7 +12,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     SAMPLE_TOPIC = args.topic
-    SAMPLE_FILE_NAME = "audio_tts.wav"
+    SAMPLE_FILE_NAME = "audio_tts.mp3"
     VIDEO_SERVER = "pexel"
 
     # 1. Generate clean script text
@@ -29,7 +23,11 @@ if __name__ == "__main__":
     generate_audio(script_text, SAMPLE_FILE_NAME)
 
     # 3. Generate whisper timestamps
-    timed_captions = generate_timed_captions(SAMPLE_FILE_NAME)
+    timed_captions = generate_timed_captions(
+      audio_filename=SAMPLE_FILE_NAME,
+      script_text=script_text,
+      model_size="medium"
+    )
     print(timed_captions)
 
     # 4. Generate search terms from captions
@@ -43,12 +41,12 @@ if __name__ == "__main__":
         print("No background video")
         background_video_urls = None
 
-    # # 6. Merge empty intervals
+    # 6. Merge empty intervals
     # background_video_urls = merge_empty_intervals(background_video_urls)
 
-    # # 7. Final video rendering
-    # if background_video_urls:
-    #     video = get_output_media(SAMPLE_FILE_NAME, timed_captions, background_video_urls, VIDEO_SERVER)
-    #     print(video)
-    # else:
-    #     print("No video")
+    # 7. Final video rendering
+    if background_video_urls:
+        video = get_output_media(SAMPLE_FILE_NAME, timed_captions, background_video_urls, VIDEO_SERVER)
+        print(video)
+    else:
+        print("No video")

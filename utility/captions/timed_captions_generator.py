@@ -1,141 +1,144 @@
-import whisper_timestamped as whisper
-from whisper_timestamped import load_model, transcribe_timestamped
 import re
 import unicodedata
+import difflib
+from whisper_timestamped import load_model, transcribe_timestamped
 
 
 # =======================
-# Load + Transcribe
+# MAIN
 # =======================
-def generate_timed_captions(audio_filename, model_size="medium"):
+
+def generate_timed_captions(
+    audio_filename,
+    script_text,
+    model_size="medium"
+):
     model = load_model(model_size)
 
-    gen = transcribe_timestamped(
+    whisper_result = transcribe_timestamped(
         model,
         audio_filename,
         verbose=False,
         fp16=False
     )
 
-    return getCaptionsWithTime(gen)
+    whisper_words = extract_whisper_words(whisper_result)
+    script_phrases = split_script_to_phrases(script_text)
 
+    return align_script_phrases_with_time(
+        script_phrases,
+        whisper_words
+    )
 
 
 # =======================
-# UTILS TỐI ƯU TIẾNG VIỆT
+# SCRIPT → PHRASES
 # =======================
 
-# giữ lại toàn bộ chữ tiếng Việt
-def clean_word_vi(word):
-    word = unicodedata.normalize("NFC", word)
-    word = word.strip()
-    # giữ chữ cái tiếng Việt / dấu / số
-    word = re.sub(r"[^0-9A-Za-zÀ-ỹăâđêôơưÀÁÂÃÈÉÊÌÍÒÓÔÕÙÚĂĐĨŨƠƯĂẠ-ỹ\-\"']", "", word)
-    return word
+def split_script_to_phrases(script_text):
+    """
+    Cắt script theo đúng nhịp đã viết cho TTS
+    """
+    script_text = unicodedata.normalize("NFC", script_text)
+
+    lines = []
+    for line in script_text.split("\n"):
+        parts = re.split(r"[.!?]", line)
+        for p in parts:
+            p = p.strip()
+            if p:
+                lines.append(p)
+
+    return lines
 
 
-# Danh sách từ "ngắt caption" tự nhiên cho tiếng Việt
-VI_BREAK_WORDS = {
-    "và", "nhưng", "rồi", "thì", "là", "để", "vì", "do", "nếu", "khi",
-    "vậy", "cho", "còn", "cũng", "nên"
+def tokenize(text):
+    return re.findall(
+        r"[0-9A-Za-zÀ-ỹăâđêôơưĂÂÊÔƠƯĐà-ỹ]+",
+        text.lower()
+    )
+
+
+# =======================
+# WHISPER WORDS
+# =======================
+
+def extract_whisper_words(analysis):
+    words = []
+    for seg in analysis.get("segments", []):
+        for w in seg.get("words", []):
+            if "start" in w and "end" in w:
+                words.append({
+                    "text": normalize_word(w["text"]),
+                    "start": w["start"],
+                    "end": w["end"]
+                })
+    return words
+
+
+# =======================
+# NORMALIZE
+# =======================
+
+WORD_FIX = {
+    "hách": "hack",
+    "trùng": "trùm",
+    "lau": "lao",
+    "hát": "hạt"
 }
 
 
-def split_vietnamese_phrases(words, max_len=20):
-    """
-    Chia câu tiếng Việt thành các cụm có nghĩa.
-    Ưu tiên ngắt ở các từ nối / từ phụ / giới từ.
-    """
-    chunks = []
-    current = []
-
-    for w in words:
-        w_clean = clean_word_vi(w)
-        if not w_clean:
-            continue
-
-        # Nếu đang quá dài → tách luôn
-        if sum(len(x) + 1 for x in current) + len(w_clean) > max_len:
-            chunks.append(" ".join(current))
-            current = [w_clean]
-            continue
-
-        current.append(w_clean)
-
-        # Nếu từ thuộc nhóm "điểm ngắt tự nhiên" → tách cụm
-        if w_clean.lower() in VI_BREAK_WORDS and len(current) >= 3:
-            chunks.append(" ".join(current))
-            current = []
-
-    if current:
-        chunks.append(" ".join(current))
-
-    return chunks
-
+def normalize_word(word):
+    word = unicodedata.normalize("NFC", word)
+    word = re.sub(
+        r"[^0-9A-Za-zÀ-ỹăâđêôơưĂÂÊÔƠƯĐà-ỹ]",
+        "",
+        word
+    )
+    return WORD_FIX.get(word.lower(), word.lower())
 
 
 # =======================
-# TIMESTAMP MAPPING
+# ALIGN SCRIPT ↔ TIME
 # =======================
 
-def getTimestampMapping(whisper_analysis):
-    index = 0
-    mapping = {}
-
-    for seg in whisper_analysis.get("segments", []):
-        for word in seg.get("words", []):
-            text = word.get("text", "").strip()
-            if not text:
-                continue
-
-            end_time = word.get("end", None)
-            if end_time is None:
-                continue
-
-            new_index = index + len(text) + 1
-            mapping[(index, new_index)] = end_time
-            index = new_index
-
-    return mapping
-
-
-def interpolateTime(pos, mapping):
-    best = None
-    for (start, end), ts in mapping.items():
-        if start <= pos <= end:
-            return ts
-        if end < pos:
-            best = ts
-    return best
-
-
-
-# =======================
-# FINALLY — FI NÊU TIẾNG VIỆT
-# =======================
-
-def getCaptionsWithTime(whisper_analysis, maxCaptionSize=20):
-
-    mapping = getTimestampMapping(whisper_analysis)
-    text = whisper_analysis.get("text", "").strip()
-    if not text:
-        return []
-
-    raw_words = text.split()
-    phrases = split_vietnamese_phrases(raw_words, max_len=maxCaptionSize)
-
+def align_script_phrases_with_time(script_phrases, whisper_words):
     captions = []
-    start_time = 0
-    pos = 0
+    w_idx = 0
 
-    for phrase in phrases:
-        pos += len(phrase) + 1
-        end_time = interpolateTime(pos, mapping)
+    for phrase in script_phrases:
+        tokens = tokenize(phrase)
+        if not tokens:
+            continue
 
-        if end_time is None:
-            end_time = start_time + 0.8  # fallback nhỏ
+        start_time = None
+        end_time = None
 
-        captions.append(((start_time, end_time), phrase))
-        start_time = end_time
+        matched = 0
+
+        for i in range(w_idx, len(whisper_words)):
+            score = difflib.SequenceMatcher(
+                None,
+                whisper_words[i]["text"],
+                tokens[matched]
+            ).ratio()
+
+            if score > 0.7:
+                if start_time is None:
+                    start_time = whisper_words[i]["start"]
+                end_time = whisper_words[i]["end"]
+                matched += 1
+                w_idx = i + 1
+
+                if matched >= len(tokens):
+                    break
+
+        if start_time is None:
+            continue
+
+        captions.append((
+            (round(start_time, 2), round(end_time, 2)),
+            phrase
+        ))
 
     return captions

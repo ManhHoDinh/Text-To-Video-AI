@@ -1,48 +1,105 @@
 import os
 import json
+import re
+import unicodedata
+
 from google import genai
 from google.genai import types
 from google.genai.errors import APIError
 
-# --- THIẾT LẬP GEMINI API (Lấy từ đoạn mã trước) ---
-# Đảm bảo bạn đã đặt biến môi trường GEMINI_API_KEY
-try:
-    client = genai.Client()
-except Exception:
-    client = None
 
-model = "gemini-3-pro-preview" 
-# ---------------------------------------------------
+# =======================
+# GEMINI CLIENT SETUP
+# =======================
 
-def generate_script(topic):
-    if client is None:
-        print("Lỗi: Không thể khởi tạo Gemini client. Hãy kiểm tra GEMINI_API_KEY.")
+def init_gemini_client():
+    try:
+        return genai.Client()
+    except Exception:
         return None
-        
-    prompt_system = """
-    Bạn là một biên kịch TikTok chuyên nghiệp, chuyên tạo ra những video ngắn VIRAL, thu hút người xem ngay từ 2 giây đầu.
-    Phong cách viết phải:
-    - Hook cực mạnh mở đầu (gây sốc / bất ngờ / tò mò)
-    - Câu ngắn, tiết tấu nhanh, dễ nghe, dễ hiểu
-    - Tăng dần độ hấp dẫn, luôn giữ người xem “muốn nghe tiếp”
-    - Có twist hoặc thông tin gây ngạc nhiên
-    - Không vòng vo, không lan man
-    - Ngôn ngữ đời thường, đậm chất TikTok
-    - Dưới 140 từ (tương ứng video ~50 giây)
 
-    Bắt buộc trả về DUY NHẤT dạng JSON:
-    {"script": "nội dung kịch bản ở đây"}
+
+client = init_gemini_client()
+MODEL_NAME = "gemini-3-pro-preview"
+
+
+# =======================
+# PROMPT TỐI ƯU CHO TTS + CAPTION
+# =======================
+
+PROMPT_SYSTEM = """
+Bạn là một biên kịch TikTok chuyên nghiệp, đồng thời là chuyên gia viết kịch bản cho AI Text-to-Speech.
+
+MỤC TIÊU:
+- Kịch bản phải NGHE HAY khi đọc bằng AI TTS (đặc biệt là FPT AI)
+- Kịch bản giúp hệ thống tạo caption tự động chính xác
+
+QUY TẮC BẮT BUỘC:
+- Mỗi câu KHÔNG quá 12 từ
+- Câu ngắn, nhịp nhanh, giống lời nói
+- Dùng dấu chấm (.) để ngắt hơi mạnh
+- Dùng dấu phẩy (,) để ngắt hơi nhẹ
+- KHÔNG dùng dấu "..."
+- KHÔNG dùng emoji
+- KHÔNG dùng số dạng chữ số (1, 2, 3)
+- Viết số bằng chữ (một, hai, ba)
+- Tối đa 120 từ
+- Không xuống dòng giữa câu
+
+PHONG CÁCH:
+- Hook mạnh ngay câu đầu
+- Tăng dần cao trào
+- Có twist hoặc kết bất ngờ
+- Có một vài từ NHẤN MẠNH (viết HOA, rất ít)
+
+BẮT BUỘC trả về DUY NHẤT dạng JSON:
+{"script": "nội dung kịch bản ở đây"}
+"""
+
+
+# =======================
+# SCRIPT NORMALIZER (CHO TTS)
+# =======================
+
+def normalize_script_for_tts(script: str) -> str:
     """
-    
-    full_user_content = f"{prompt_system}\n\nCHỦ ĐỀ: {topic}"
+    Làm sạch & tối ưu script cho FPT TTS + Whisper
+    """
+    script = unicodedata.normalize("NFC", script)
+
+    # Xóa ...
+    script = script.replace("...", ".")
+
+    # Gộp nhiều dấu chấm
+    script = re.sub(r"\.{2,}", ".", script)
+
+    # Gộp nhiều dấu phẩy
+    script = re.sub(r",{2,}", ",", script)
+
+    # Mỗi câu một dòng để tạo nhịp đọc rõ
+    script = script.replace(". ", ".\n")
+
+    return script.strip()
+
+
+# =======================
+# GENERATE SCRIPT
+# =======================
+
+def generate_script(topic: str) -> str | None:
+    if client is None:
+        print("❌ Không khởi tạo được Gemini client. Kiểm tra GEMINI_API_KEY.")
+        return None
+
+    user_content = f"{PROMPT_SYSTEM}\n\nCHỦ ĐỀ: {topic}"
 
     try:
         response = client.models.generate_content(
-            model=model,
+            model=MODEL_NAME,
             contents=[
                 types.Content(
-                    role="user", 
-                    parts=[types.Part(text=full_user_content)] # Đã sửa lỗi Part.from_text()
+                    role="user",
+                    parts=[types.Part(text=user_content)]
                 )
             ],
             config=types.GenerateContentConfig(
@@ -50,33 +107,39 @@ def generate_script(topic):
                 response_schema={
                     "type": "object",
                     "properties": {
-                        "script": {"type": "string", "description": "Nội dung kịch bản TikTok dưới 140 từ."}
+                        "script": {
+                            "type": "string",
+                            "description": "Kịch bản TikTok tối ưu cho AI TTS"
+                        }
                     },
                     "required": ["script"]
                 }
             )
         )
     except APIError as e:
-        print(f"Lỗi API: {e}")
+        print(f"❌ Lỗi Gemini API: {e}")
         return None
     except Exception as e:
-        print(f"Lỗi không xác định: {e}")
+        print(f"❌ Lỗi không xác định: {e}")
         return None
 
-    content = response.text.strip()
+    raw_text = response.text.strip()
 
+    # Parse JSON an toàn
     try:
-        # Tách JSON hợp lệ
-        return json.loads(content)["script"].strip()
-    except (json.JSONDecodeError, KeyError):
-        # Fallback: Xử lý lỗi JSON
-        json_start = content.find("{")
-        json_end = content.rfind("}") + 1
-        if json_start != -1 and json_end != -1 and json_end > json_start:
-            cleaned = content[json_start:json_end]
+        script = json.loads(raw_text)["script"]
+    except json.JSONDecodeError:
+        start = raw_text.find("{")
+        end = raw_text.rfind("}") + 1
+        if start != -1 and end != -1:
             try:
-                return json.loads(cleaned)["script"].strip()
-            except json.JSONDecodeError:
-                return f"Lỗi phân tích JSON sau khi làm sạch: {content}"
+                script = json.loads(raw_text[start:end])["script"]
+            except Exception:
+                print("❌ Không parse được JSON từ Gemini")
+                return None
         else:
-            return f"Lỗi không tìm thấy JSON: {content}"
+            print("❌ Không tìm thấy JSON hợp lệ")
+            return None
+
+    return normalize_script_for_tts(script)
+
